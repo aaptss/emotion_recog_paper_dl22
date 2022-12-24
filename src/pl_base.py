@@ -26,7 +26,7 @@ class BaseClassificationModel(pl.LightningModule):
 
         self.loss_fn = nn.CrossEntropyLoss()
 
-        self.model = LSTM_for_baseline(66150, 1, num_layers=1, num_classes=10, dropout=0)
+        self.model = RNN(66150, 1, num_layers=1, num_classes=10, dropout=0)
         #TODO get validation metrics
         self.f1 = F1Score()
         self.val_accuracy = Accuracy()
