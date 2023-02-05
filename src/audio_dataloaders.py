@@ -14,6 +14,7 @@ from sklearn.model_selection import train_test_split
 
 import time
 from tqdm.notebook import tqdm
+from torch.nn.utils.rnn import pad_sequence
 
 
 class BaseAudioSignalDataset(Dataset):
@@ -48,24 +49,26 @@ class BaseAudioSignalDataset(Dataset):
         sfdata, sr = sf.read(path, always_2d=True, dtype='float32')  # load audio to 1d array
         sound_1d_array = sfdata[:,0]/2 + sfdata[:,1]/2 
         assert sr == self.sampling_rate
-        return sound_1d_array
+        wav_len = len(sound_1d_array)
+        return sound_1d_array, wav_len
 
     def extract_features(self, path):
-        sample = self.load_wav(path)
+        sample, sample_len = self.load_wav(path)
         if self.transform:
             sample = self.transform(sample)
-        return torch.tensor(sample)
+        return sample, sample_len
 
     def __getitem__(self, index):
         item = self.data_list[index]
-        x = self.extract_features(item[0])
-        y = item[1] - 1
+        x, x_len = self.extract_features(item[0])
+        x = torch.tensor(x)
+        y = torch.tensor(item[1] - 1)
 
         if self.use_game_context:
             ctx = torch.from_numpy(get_context_vector(*item[2], self.path_to_processed_csgo_data)).float()
+            return (x, ctx, y, x_len)
         else:
-            ctx = torch.tensor([])
-        return x, ctx, y
+            return (x, y, x_len)
 
 
 class BaseSpectrogramDataset(BaseAudioSignalDataset):
@@ -110,15 +113,16 @@ class BaseSpectrogramDataset(BaseAudioSignalDataset):
         x = self.extract_features(item[0])
         if self.transform:
             x = self.transform(x)
-        y = item[1] - 1
+        y = torch.tensor(item[1] - 1)
 
         if self.use_game_context:
             ctx = get_context_vector(*item[2], self.path_to_processed_csgo_data)
             for event, val in enumerate(ctx):
                 x[event+1] = 255 * torch.ones_like(x[0]) if val else torch.zeros_like(x[0])
+                return (x, ctx, y)
         else:
-            ctx = torch.tensor([])
-        return x, ctx, y
+                return (x, y)
+
 
     def calculate_all_windows(self, audio):
         """
@@ -178,11 +182,24 @@ def get_data(data_list, use_game_context, path_to_processed_csgo_data):
     return np.array(X), np.array(Y)
 
 
+def collate_nocontext(data): 
+    _, labels, lengths = zip(*data)
+    max_len = max(lengths)
+    
+    features = []
+    for i in range(len(data)):
+        features.append(data[i][0])
+    
+    features = pad_sequence(features, batch_first=True)
+    labels = torch.tensor(labels)
+    lengths = torch.tensor(lengths)
+    return (features.float(), labels, lengths)
+
 def get_dataloader(file_path, 
                    path_to_audio, 
                    path_to_splitted_audio, 
                    path_to_processed_csgo_data,
-                   DatasetClass,
+                   do_2d=False,
                    splitsize=0.8,
                    transform=None,
                    use_game_context=False,
@@ -195,28 +212,41 @@ def get_dataloader(file_path,
         val_list = None
         train_list, val_list = handle_audio_loading(file_path, path_to_audio, path_to_splitted_audio, splitsize)
 
-    print('\nPrepare train dataset')
-    train_dataset = DatasetClass(train_list, 
-                                 path_to_processed_csgo_data=path_to_processed_csgo_data,
-                                 use_game_context=use_game_context, 
-                                 num_workers=num_workers,
-                                 transform=transform)
-    
-    train_dataloader = DataLoader(train_dataset,
-                                  batch_size=batch_size,
-                                  num_workers=num_workers, 
-                                  shuffle=True)
-
-    print('Prepare val dataset')
-    val_dataset = DatasetClass(val_list, 
-                               path_to_processed_csgo_data=path_to_processed_csgo_data,
-                               use_game_context=use_game_context, 
-                               num_workers=num_workers,
-                               transform=None)
-
-    val_dataloader = DataLoader(val_dataset, 
-                                batch_size=batch_size,
-                                num_workers=num_workers,
-                                shuffle=False)
+    if not do_2d:
+        train_dataset = BaseAudioSignalDataset(train_list, 
+            path_to_processed_csgo_data=path_to_processed_csgo_data,
+            use_game_context=use_game_context, 
+            transform=transform)
+        train_dataloader = DataLoader(train_dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            collate_fn=collate_nocontext,
+            shuffle=True)
+        val_dataset = BaseAudioSignalDataset(val_list, 
+            path_to_processed_csgo_data=path_to_processed_csgo_data,
+            use_game_context=use_game_context, 
+            transform=None)
+        val_dataloader = DataLoader(val_dataset, 
+            batch_size=batch_size,
+            num_workers=num_workers,
+            collate_fn=collate_nocontext,
+            shuffle=False)
+    if do_2d:
+        train_dataset = BaseSpectrogramDataset(train_list, 
+            path_to_processed_csgo_data=path_to_processed_csgo_data,
+            use_game_context=use_game_context, 
+            transform=transform)
+        train_dataloader = DataLoader(train_dataset,
+            batch_size=batch_size,
+            num_workers=num_workers, 
+            shuffle=True)
+        val_dataset = BaseSpectrogramDataset(val_list, 
+            path_to_processed_csgo_data=path_to_processed_csgo_data,
+            use_game_context=use_game_context, 
+            transform=None)
+        val_dataloader = DataLoader(val_dataset, 
+            batch_size=batch_size,
+            num_workers=num_workers,
+            shuffle=False)
 
     return train_dataloader, val_dataloader

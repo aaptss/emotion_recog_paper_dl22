@@ -7,26 +7,10 @@ import torchaudio
 import numpy as np
 
 from torch.autograd import Variable
-from .model_arguments import modelArgs
 from data_csgo_tournament.csgo_tournament_metadata import DATASET_ROOT
 
-class RNN(nn.Module):
-    def __init__(
-        self, 
-        hidden_size, 
-        num_layers, 
-        input_size, 
-        num_classes, 
-        device, 
-        classes=None
-    ):
-        super(RNN, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, num_classes)
-        self.device = device
-        self.classes = classes
+import types
+from typing import List, Union, Any, Dict
 
 """
 принимает запись и вектор состояния 
@@ -36,8 +20,17 @@ class RNN(nn.Module):
 
 конкаченное в fc
 """
+class RNN(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, num_classes, device, classes=None):
+        super(RNN, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, num_classes)
+        self.device = device
+        self.classes = classes
+
     def forward(self, x):
-        # Set initial hidden and cell states
         batch_size = x.size(0)
         h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(self.device) 
         c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size).to(self.device) 
@@ -50,19 +43,12 @@ class RNN(nn.Module):
         return out
 
     def predict(self, x):
-        '''Predict one label from one sample's features'''
-        # x: feature from a sample, LxN
-        #   L is length of sequency
-        #   N is feature dimension
         x = torch.tensor(x[np.newaxis, :], dtype=torch.float32)
         x = x.to(self.device)
         outputs = self.forward(x)
         _, predicted = torch.max(outputs.data, 1)
         predicted_index = predicted.item()
         return predicted_index
-    
-    def set_classes(self, classes):
-        self.classes = classes 
     
     def predict_audio_label(self, audio):
         idx = self.predict_audio_label_index(audio)
@@ -76,7 +62,9 @@ class RNN(nn.Module):
         idx = self.predict(x)
         return idx
 
-def load_weights(model, weights, PRINT=False):    
+
+def do_load_weights_to_model(model: nn.Module, 
+                 weights: Dict):
     for i, (name, param) in enumerate(weights.items()):
         model_state = model.state_dict()
         if name not in model_state:
@@ -91,9 +79,10 @@ def load_weights(model, weights, PRINT=False):
             print(f"\tModel shape = {model_shape}, weights' shape = {param.shape}.")
         else:
             model_state[name].copy_(param)
-        
 
-def create_RNN(args: modelArgs):
+            
+def compose_model(args: types.SimpleNamespace, 
+                  load_weights_from: types.SimpleNamespace = None):
     save_log_to = args.save_model_to + "log.txt"
     save_fig_to = args.save_model_to + "fig.jpg"
     
@@ -103,17 +92,19 @@ def create_RNN(args: modelArgs):
         args.hidden_size, 
         args.num_layers, 
         args.num_classes, 
-        args.device).to(device)
+        args.device,
+        args.classes).to(args.device)
 
     if args.load_weights_from:
         print(f"Load weights from: {args.load_weights_from}")
         weights = torch.load(args.load_weights_from)
-        load_weights(model, weights)
+        do_load_weights_to_model(model, weights)
     return model
+    
 
 
 if __name__ == ("__main__"):
-    args = modelArgs()
+    args = types.SimpleNamespace()
 
     args.hidden_size = 64
     args.num_layers = 3
@@ -142,8 +133,7 @@ if __name__ == ("__main__"):
     args.classname_filename = f'{DATASET_ROOT}/classes.names' 
     with open(args.classname_filename) as f:
         _classes = json.load(f)
-    args.num_classes = len(_classes) # should be added with a value somewhere, like this:
-    #                = len(lib_io.read_list(args.classes_txt))
+    args.num_classes = len(_classes) 
 
     # log setting
     args.plot_accu = True # if true, plot accuracy for every epoch

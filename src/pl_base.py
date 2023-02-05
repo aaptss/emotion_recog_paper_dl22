@@ -10,7 +10,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from torchmetrics import F1Score, Accuracy  #TODO
 from torch.utils.data import Dataset, DataLoader
 
-from .model_lstm_standart import create_RNN, RNN
+from .model_lstm_standart import compose_model, RNN
 
 
 class BaseClassificationModel(pl.LightningModule):
